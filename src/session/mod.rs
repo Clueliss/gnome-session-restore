@@ -31,7 +31,7 @@ impl Eq for SessionApplicationByWindowClass {}
 
 impl Hash for SessionApplicationByWindowClass {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.window.window_class.hash(state)
+        self.0.window.window_class.hash(state);
     }
 }
 
@@ -41,13 +41,13 @@ fn unique_applications(sess: Vec<SessionApplication>) -> HashSet<SessionApplicat
         .collect()
 }
 
-pub fn save_session<P: AsRef<Path>>(conn: &GnomeShellDBusProxy, path: P) {
-    let num_monitors = conn.get_n_monitors()
-        .expect("failed to communicate on dbus");
+pub fn save_session<P: AsRef<Path>>(
+    conn: &GnomeShellDBusProxy,
+    path: P,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let num_monitors = conn.get_n_monitors()?;
 
-    let res = conn
-        .list_all_windows()
-        .expect("failed to communicate on dbus");
+    let res = conn.list_all_windows()?;
 
     let v: Vec<_> = res
         .into_iter()
@@ -64,14 +64,21 @@ pub fn save_session<P: AsRef<Path>>(conn: &GnomeShellDBusProxy, path: P) {
         num_monitors,
     };
 
-    let f = File::create(path).expect("could not create session file");
-    serde_json::to_writer(f, &session).expect("could not write output to file");
+    let f = File::create(path)?;
+    serde_json::to_writer(f, &session)?;
+
+    Ok(())
 }
 
-pub fn restore_session<P: AsRef<Path>>(conn: &GnomeShellDBusProxy, path: P, rm: bool, mark: bool) {
-    let f = File::open(path.as_ref()).expect("could not open session file for reading");
+pub fn restore_session<P: AsRef<Path>>(
+    conn: &GnomeShellDBusProxy,
+    path: P,
+    rm: bool,
+    mark: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let f = File::open(path.as_ref())?;
 
-    let sess: Session = serde_json::from_reader(f).expect("could not parse session file");
+    let sess: Session = serde_json::from_reader(f)?;
 
     let uniq = unique_applications(sess.applications);
 
@@ -91,9 +98,11 @@ pub fn restore_session<P: AsRef<Path>>(conn: &GnomeShellDBusProxy, path: P, rm: 
 
     if matches!(cur_num_monitors, Ok(n) if n == sess.num_monitors) {
         for win in uniq {
-            if let Err(e) = conn.set_window_geom_by_class(&win.0.window.window_class, win.0.window.geom) {
+            if let Err(e) =
+                conn.set_window_geom_by_class(&win.0.window.window_class, win.0.window.geom)
+            {
                 eprintln!(
-                    "Error moving window '{class}': {e}",
+                    "Error moving window '{class}': {e:?}",
                     class = win.0.window.window_class,
                     e = e
                 );
@@ -105,12 +114,14 @@ pub fn restore_session<P: AsRef<Path>>(conn: &GnomeShellDBusProxy, path: P, rm: 
 
     if mark {
         let new_file = path.as_ref().with_extension(now);
-        std::fs::rename(path.as_ref(), &new_file).expect("could not rename session file");
+        std::fs::rename(path.as_ref(), &new_file)?;
 
         if rm {
-            std::fs::remove_file(new_file).expect("could not remove session file");
+            std::fs::remove_file(new_file)?;
         }
     } else if rm {
-        std::fs::remove_file(path).expect("could not remove session file");
+        std::fs::remove_file(path)?;
     }
+
+    Ok(())
 }

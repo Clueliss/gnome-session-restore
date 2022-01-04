@@ -1,12 +1,12 @@
-use zbus::{Connection, Proxy};
+pub mod extensions;
+pub mod meta_window;
 
-use serde::Deserialize;
+pub use meta_window::{MetaWindow, WindowGeom};
 
 use include_js::{include_js, JSStr, JSTemplate};
+use serde::Deserialize;
 use thiserror::Error;
-
-pub mod meta_window;
-pub use meta_window::{MetaWindow, WindowGeom};
+use zbus::{Connection, Proxy};
 
 const GNOME_SHELL_DEST: &str = "org.gnome.Shell";
 const GNOME_SHELL_PATH: &str = "/org/gnome/Shell";
@@ -14,13 +14,13 @@ const GNOME_SHELL_PATH: &str = "/org/gnome/Shell";
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("dbus error")]
-    DBusError(#[from] zbus::Error),
+    DBus(#[from] zbus::Error),
 
     #[error("shell eval error: {0}")]
-    ShellError(String),
+    Shell(String),
 
     #[error("internal error, failed to deserialize")]
-    DeserializeError(#[from] serde_json::Error),
+    Deserialization(#[from] serde_json::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -53,7 +53,7 @@ impl<'a> GnomeShellDBusProxy<'a> {
         if success {
             Ok(res)
         } else {
-            Err(Error::ShellError(res))
+            Err(Error::Shell(res))
         }
     }
 
@@ -65,7 +65,7 @@ impl<'a> GnomeShellDBusProxy<'a> {
             if s.is_empty() {
                 Ok(())
             } else {
-                Err(Error::ShellError(format!(
+                Err(Error::Shell(format!(
                     "expected empty return but got value: '{}'",
                     s
                 )))

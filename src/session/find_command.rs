@@ -1,6 +1,10 @@
 use regex::Regex;
 use serde::Deserialize;
-use std::{ffi::OsString, fs::File, ops::Deref, path::Path};
+use std::{
+    ffi::{OsStr, OsString},
+    fs::File,
+    path::Path,
+};
 use thiserror::Error;
 
 const DESKTOP_ENTRY_LOCATIONS: [&str; 5] = [
@@ -42,7 +46,7 @@ fn find_main_exec_entry<P: AsRef<Path>>(path: P) -> Result<Vec<String>, FindErro
     let cmdline = shell_words::split(&de.desktop_entry.exec)
         .map_err(|_| FindError::InvalidEntryFound)?
         .into_iter()
-        .filter(|s| !["%u", "%U", "%f", "%F"].contains(&s.deref()))
+        .filter(|s| !["%u", "%U", "%f", "%F"].contains(&s.as_str()))
         .collect();
 
     Ok(cmdline)
@@ -72,23 +76,22 @@ pub fn try_find_command_by_window_class(
                 r#"({window_class}|{alt_window_class})(-.*?)*?\.desktop"#,
                 window_class = w_class.to_lowercase(),
                 alt_window_class = awc.to_lowercase()
-            )).ok()
+            ))
+            .ok()
         })
         .or_else(|| {
             Regex::new(&format!(
                 r#"{window_class}(-.*?)*?\.desktop"#,
                 window_class = w_class.to_lowercase()
-            )).ok()
+            ))
+            .ok()
         })
         .unwrap();
 
     let mut match_filename = None;
     let mut match_location = None;
 
-    for location in DESKTOP_ENTRY_LOCATIONS
-        .iter()
-        .map(|s| shellexpand::tilde(s))
-    {
+    for location in DESKTOP_ENTRY_LOCATIONS.iter().map(shellexpand::tilde) {
         let files = match std::fs::read_dir(location.as_ref()) {
             Ok(files) => files,
             Err(_) => continue,
@@ -105,7 +108,7 @@ pub fn try_find_command_by_window_class(
                     .map(|f: &OsString| f.to_string_lossy());
 
                 if is_rhs_less_complex(mfm_str.as_deref(), &filename_str) {
-                    match_location = Some(location.to_owned());
+                    match_location = Some(location.clone());
                     match_filename = Some(filename);
                 }
             }
@@ -148,9 +151,10 @@ pub fn find_command(
     let proc_cmdline = find_command_in_proc(pid)?;
     let alt_window_class = Path::new(&proc_cmdline[0])
         .file_name()
-        .map(|f| f.to_string_lossy());
+        .map(OsStr::to_string_lossy);
 
-    if let Ok(cmdline) = try_find_command_by_window_class(window_class, alt_window_class.as_deref()) {
+    if let Ok(cmdline) = try_find_command_by_window_class(window_class, alt_window_class.as_deref())
+    {
         println!("{} from desktop entry", window_class);
         return Ok(cmdline);
     }

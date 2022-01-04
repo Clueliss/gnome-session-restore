@@ -1,7 +1,7 @@
 [package]
 name = "gnome-session-restore"
-edition = "2018"
-version = "0.1.0"
+edition = "2021"
+version = "0.2.0"
 authors = ["Liss Heidrich"]
 description = "Save and restore gnome sessions"
 
@@ -9,8 +9,8 @@ description = "Save and restore gnome sessions"
 
 [dependencies]
 chrono = "0.4.19"
-clap = "3.0.0-beta.2"
-include_js = {version = "0.1.1", path = "../include_js/include_js"}
+clap = "3.0.0-beta.5"
+include_js = "0.1.1"
 regex = "1.5"
 serde = "1.0.125"
 serde_ini = "0.2.0"
@@ -19,4 +19,6 @@ shell-words = "1.0.0"
 shellexpand = "2.1.0"
 thiserror = "1.0.24"
 which = "4.1.0"
-zbus = "1.9.1"
+zbus = "1.9.2"
+zvariant = "2.9.0"
+zvariant_derive = "2.9.0"
