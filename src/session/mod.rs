@@ -1,6 +1,6 @@
 mod find_command;
 
-use crate::gdbus::{GnomeShellDBusProxy, MetaWindow, WindowGeom};
+use crate::gdbus::{GnomeShellDBusProxy, MetaWindow};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet, fs::File, hash::Hash, path::Path, process::Command, time::Duration,
@@ -10,8 +10,13 @@ use std::{
 struct SessionApplication {
     #[serde(flatten)]
     window: MetaWindow,
-
     cmdline: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Session {
+    applications: Vec<SessionApplication>,
+    num_monitors: u32,
 }
 
 struct SessionApplicationByWindowClass(SessionApplication);
@@ -37,6 +42,9 @@ fn unique_applications(sess: Vec<SessionApplication>) -> HashSet<SessionApplicat
 }
 
 pub fn save_session<P: AsRef<Path>>(conn: &GnomeShellDBusProxy, path: P) {
+    let num_monitors = conn.get_n_monitors()
+        .expect("failed to communicate on dbus");
+
     let res = conn
         .list_all_windows()
         .expect("failed to communicate on dbus");
@@ -51,17 +59,21 @@ pub fn save_session<P: AsRef<Path>>(conn: &GnomeShellDBusProxy, path: P) {
         })
         .collect();
 
+    let session = Session {
+        applications: v,
+        num_monitors,
+    };
+
     let f = File::create(path).expect("could not create session file");
-    serde_json::to_writer(f, &v).expect("could not write output to file");
+    serde_json::to_writer(f, &session).expect("could not write output to file");
 }
 
 pub fn restore_session<P: AsRef<Path>>(conn: &GnomeShellDBusProxy, path: P, rm: bool, mark: bool) {
     let f = File::open(path.as_ref()).expect("could not open session file for reading");
 
-    let sess: Vec<SessionApplication> =
-        serde_json::from_reader(f).expect("could not parse session file");
+    let sess: Session = serde_json::from_reader(f).expect("could not parse session file");
 
-    let uniq = unique_applications(sess);
+    let uniq = unique_applications(sess.applications);
 
     for win in &uniq {
         let res = Command::new(&win.0.cmdline[0])
@@ -75,27 +87,17 @@ pub fn restore_session<P: AsRef<Path>>(conn: &GnomeShellDBusProxy, path: P, rm: 
 
     std::thread::sleep(Duration::from_secs(1));
 
-    let n_monitors = conn.get_n_monitors().unwrap_or(2);
+    let cur_num_monitors = conn.get_n_monitors();
 
-    for win in uniq {
-        let x = if n_monitors < 2 {
-            let max_x = win.0.window.geom.x + win.0.window.geom.width;
-            win.0.window.geom.x - (max_x - 1920)
-        } else {
-            win.0.window.geom.x
-        };
-
-        let new_geom = WindowGeom {
-            x,
-            ..win.0.window.geom
-        };
-
-        if let Err(e) = conn.set_window_geom_by_class(&win.0.window.window_class, new_geom) {
-            eprintln!(
-                "Error moving window '{class}': {e}",
-                class = win.0.window.window_class,
-                e = e
-            );
+    if matches!(cur_num_monitors, Ok(n) if n == sess.num_monitors) {
+        for win in uniq {
+            if let Err(e) = conn.set_window_geom_by_class(&win.0.window.window_class, win.0.window.geom) {
+                eprintln!(
+                    "Error moving window '{class}': {e}",
+                    class = win.0.window.window_class,
+                    e = e
+                );
+            }
         }
     }
 

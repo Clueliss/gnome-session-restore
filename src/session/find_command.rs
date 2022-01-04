@@ -149,8 +149,7 @@ pub fn find_command(
         .file_name()
         .map(|f| f.to_string_lossy());
 
-    if let Ok(cmdline) = try_find_command_by_window_class(window_class, alt_window_class.as_deref())
-    {
+    if let Ok(cmdline) = try_find_command_by_window_class(window_class, alt_window_class.as_deref()) {
         println!("{} from desktop entry", window_class);
         return Ok(cmdline);
     }
