@@ -58,6 +58,12 @@ struct Opts {
     )]
     system: bool,
 
+    #[clap(
+        long,
+        about = "overrides the use_unsafe_mode_enabler option in ~/.config/gnome-session-restore.conf"
+    )]
+    use_unsafe_mode_enabler_override: Option<bool>,
+
     #[clap(subcommand)]
     subcommand: SessionAction,
 }
@@ -79,6 +85,10 @@ fn main() {
         }
     };
 
+    let use_unsafe_mode_enabler = opts
+        .use_unsafe_mode_enabler_override
+        .unwrap_or(config.use_unsafe_mode_enabler);
+
     let conn = if opts.system {
         Connection::new_system().expect("could not connect to system dbus")
     } else if let Some(addr) = &opts.dbus_address {
@@ -87,9 +97,9 @@ fn main() {
         Connection::new_session().expect("could not connect to session dbus")
     };
 
-    let shelldbus = GnomeShellDBusProxy::new(&conn).expect("failed to create proxy");
+    let shellbus = GnomeShellDBusProxy::new(&conn).expect("failed to create proxy");
 
-    let (extbus, prev_ext_state) = if config.use_unsafe_mode_enabler {
+    let (extbus, prev_ext_state) = if use_unsafe_mode_enabler {
         let extbus =
             GnomeShellExtensionsDBusProxy::new(&conn).expect("failed to create extension proxy");
 
@@ -97,7 +107,7 @@ fn main() {
 
         (Some(extbus), prev_state.state)
     } else {
-        let _: bool = shelldbus.eval(unsafe { JSStr::new_unchecked("true") })
+        let _: bool = shellbus.eval(unsafe { JSStr::new_unchecked("true") })
             .expect("gnome-shell could not complete a simple Eval, this probably means you need to use unsafe-mode-enabler or enable unsafe mode yourself");
 
         (None, ExtensionState::Uninstalled)
@@ -109,20 +119,20 @@ fn main() {
         (Some(_), ExtensionState::Enabled) => (),
         (Some(extb), _) => extb
             .enable_extension(UNSAFE_MODE_ENABLER_UUID)
-            .expect("unable to enable unsafe mode enabler"),
+            .expect("unable to enable unsafe-mode-enabler"),
         _ => (),
     }
 
     let res = match opts.subcommand {
-        SessionAction::Save => session::save_session(&shelldbus, path.as_ref()),
+        SessionAction::Save => session::save_session(&shellbus, path.as_ref()),
         SessionAction::Restore { rm, mark } => {
-            session::restore_session(&shelldbus, path.as_ref(), rm, mark)
+            session::restore_session(&shellbus, path.as_ref(), rm, mark)
         }
     };
 
     if let (Some(extb), ExtensionState::Disabled) = (&extbus, prev_ext_state) {
         if let Err(e) = extb.disable_extension(UNSAFE_MODE_ENABLER_UUID) {
-            eprintln!("Error: unable to disable unsafe mode enabler: {:?}", e);
+            eprintln!("Error: unable to disable unsafe-mode-enabler: {:?}", e);
         }
     }
 
