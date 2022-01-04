@@ -1,10 +1,11 @@
-use regex::Regex;
-use serde::Deserialize;
 use std::{
     ffi::{OsStr, OsString},
     fs::File,
     path::Path,
 };
+
+use regex::Regex;
+use serde::Deserialize;
 use thiserror::Error;
 
 const DESKTOP_ENTRY_LOCATIONS: [&str; 5] = [
@@ -138,10 +139,10 @@ pub fn find_command_in_proc(pid: i32) -> std::io::Result<Vec<String>> {
 
 pub fn find_command(
     pid: i32,
-    window_class: Option<&str>,
-    gtk_app_id: Option<&str>,
+    window_class: &str,
+    gtk_app_id: &str,
 ) -> Result<Vec<String>, FindError> {
-    if let Some(gtk_app_id) = gtk_app_id {
+    if !gtk_app_id.is_empty() {
         if let Ok(cmdline) = try_find_command_by_gtk_app_id(gtk_app_id) {
             println!("{} from gtk app id", gtk_app_id);
             return Ok(cmdline);
@@ -153,13 +154,14 @@ pub fn find_command(
         .file_name()
         .map(OsStr::to_string_lossy);
 
-    let window_class = match (window_class, &alt_window_class) {
-        (Some(w_class), Some(alt_w_class)) if w_class != alt_w_class => Some(
-            WindowClassProvider::WithAlternative(w_class, alt_w_class.as_ref()),
-        ),
-        (Some(w_class), _) => Some(WindowClassProvider::Single(w_class)),
-        (None, Some(alt_w_class)) => Some(WindowClassProvider::Single(alt_w_class.as_ref())),
-        (None, None) => None,
+    let window_class = match (window_class, alt_window_class.as_deref()) {
+        ("", None | Some("")) => None,
+        (w_class, None | Some("")) => Some(WindowClassProvider::Single(w_class)),
+        ("", Some(alt_w_class)) => Some(WindowClassProvider::Single(alt_w_class)),
+        (w_class, Some(alt_w_class)) if w_class != alt_w_class => {
+            Some(WindowClassProvider::WithAlternative(w_class, alt_w_class))
+        }
+        (w_class, Some(_)) => Some(WindowClassProvider::Single(w_class)),
     };
 
     if let Some(window_class) = window_class {

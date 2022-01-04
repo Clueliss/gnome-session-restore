@@ -1,10 +1,12 @@
 mod find_command;
 
-use crate::gdbus::{GnomeShellDBusProxy, MetaWindow};
-use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet, fs::File, hash::Hash, path::Path, process::Command, time::Duration,
 };
+
+use serde::{Deserialize, Serialize};
+
+use crate::dbus::{MetaWindow, WindowCtlProxy};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct SessionApplication {
@@ -41,20 +43,20 @@ fn unique_applications(sess: Vec<SessionApplication>) -> HashSet<SessionApplicat
         .collect()
 }
 
-pub fn save_session<P: AsRef<Path>>(
-    conn: &GnomeShellDBusProxy,
+pub fn save<P: AsRef<Path>>(
+    conn: &WindowCtlProxy,
     path: P,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let num_monitors = conn.get_n_monitors()?;
+    let num_monitors = conn.get_num_monitors()?;
 
-    let res = conn.list_all_windows()?;
+    let res = conn.list_windows()?;
 
     let v: Vec<_> = res
         .into_iter()
         .filter_map(|w| {
             let app_id = w.gtk_app_id.clone();
 
-            find_command::find_command(w.pid, w.window_class.as_deref(), w.gtk_app_id.as_deref())
+            find_command::find_command(w.pid, &w.window_class, &w.gtk_app_id)
                 .map(|cmdline| SessionApplication { window: w, cmdline })
                 .map_err(|e| eprintln!("unable to find command for {:?}: {:?}", app_id, e))
                 .ok()
@@ -72,8 +74,8 @@ pub fn save_session<P: AsRef<Path>>(
     Ok(())
 }
 
-pub fn restore_session<P: AsRef<Path>>(
-    conn: &GnomeShellDBusProxy,
+pub fn restore<P: AsRef<Path>>(
+    conn: &WindowCtlProxy,
     path: P,
     rm: bool,
     mark: bool,
@@ -96,15 +98,17 @@ pub fn restore_session<P: AsRef<Path>>(
 
     std::thread::sleep(Duration::from_secs(1));
 
-    let cur_num_monitors = conn.get_n_monitors();
+    let cur_num_monitors = conn.get_num_monitors();
 
     if matches!(cur_num_monitors, Ok(n) if n == sess.num_monitors) {
         for win in uniq {
-            if let Some(window_class) = &win.0.window.window_class {
-                if let Err(e) = conn.set_window_geom_by_class(window_class, win.0.window.geom) {
+            if !win.0.window.window_class.is_empty() {
+                if let Err(e) =
+                    conn.set_window_geom_by_class(&win.0.window.window_class, win.0.window.geom)
+                {
                     eprintln!(
                         "Error moving window '{class}': {e:?}",
-                        class = window_class,
+                        class = win.0.window.window_class,
                         e = e
                     );
                 }

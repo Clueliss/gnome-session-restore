@@ -1,16 +1,13 @@
 [package]
 name = "gnome-session-restore"
 edition = "2021"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Liss Heidrich"]
 description = "Save and restore gnome sessions"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 chrono = "0.4.19"
 clap = "3.0.0-beta.5"
-include_js = "0.1.1"
 regex = "1.5"
 serde = "1.0.125"
 serde_ini = "0.2.0"
@@ -20,5 +17,5 @@ shellexpand = "2.1.0"
 thiserror = "1.0.24"
 which = "4.1.0"
 zbus = "1.9.2"
-zvariant = "2.9.0"
-zvariant_derive = "2.9.0"
+zvariant = "2.10.0"
+zvariant_derive = "2.10.0"
