@@ -51,11 +51,13 @@ pub fn save_session<P: AsRef<Path>>(
 
     let v: Vec<_> = res
         .into_iter()
-        .map(|w| {
-            let cmdline =
-                find_command::find_command(w.pid, &w.window_class, w.gtk_app_id.as_deref())
-                    .expect("failed to find corresponding command for application");
-            SessionApplication { window: w, cmdline }
+        .filter_map(|w| {
+            let app_id = w.gtk_app_id.clone();
+
+            find_command::find_command(w.pid, w.window_class.as_deref(), w.gtk_app_id.as_deref())
+                .map(|cmdline| SessionApplication { window: w, cmdline })
+                .map_err(|e| eprintln!("unable to find command for {:?}: {:?}", app_id, e))
+                .ok()
         })
         .collect();
 
@@ -98,14 +100,14 @@ pub fn restore_session<P: AsRef<Path>>(
 
     if matches!(cur_num_monitors, Ok(n) if n == sess.num_monitors) {
         for win in uniq {
-            if let Err(e) =
-                conn.set_window_geom_by_class(&win.0.window.window_class, win.0.window.geom)
-            {
-                eprintln!(
-                    "Error moving window '{class}': {e:?}",
-                    class = win.0.window.window_class,
-                    e = e
-                );
+            if let Some(window_class) = &win.0.window.window_class {
+                if let Err(e) = conn.set_window_geom_by_class(window_class, win.0.window.geom) {
+                    eprintln!(
+                        "Error moving window '{class}': {e:?}",
+                        class = window_class,
+                        e = e
+                    );
+                }
             }
         }
     }

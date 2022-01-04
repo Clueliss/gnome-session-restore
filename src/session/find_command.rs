@@ -27,6 +27,12 @@ pub enum FindError {
     InvalidEntryFound,
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum WindowClassProvider<'a> {
+    Single(&'a str),
+    WithAlternative(&'a str, &'a str),
+}
+
 fn find_main_exec_entry<P: AsRef<Path>>(path: P) -> Result<Vec<String>, FindError> {
     #[derive(Deserialize, Debug)]
     struct MainSection {
@@ -67,26 +73,20 @@ fn is_rhs_less_complex(x: Option<&str>, y: &str) -> bool {
 }
 
 pub fn try_find_command_by_window_class(
-    w_class: &str,
-    alt_w_class: Option<&str>,
+    window_class: WindowClassProvider<'_>,
 ) -> Result<Vec<String>, FindError> {
-    let re = alt_w_class
-        .and_then(|awc| {
-            Regex::new(&format!(
-                r#"({window_class}|{alt_window_class})(-.*?)*?\.desktop"#,
-                window_class = w_class.to_lowercase(),
-                alt_window_class = awc.to_lowercase()
-            ))
-            .ok()
-        })
-        .or_else(|| {
-            Regex::new(&format!(
-                r#"{window_class}(-.*?)*?\.desktop"#,
-                window_class = w_class.to_lowercase()
-            ))
-            .ok()
-        })
-        .unwrap();
+    let re = match window_class {
+        WindowClassProvider::Single(w_class) => Regex::new(&format!(
+            r#"{window_class}(-.*?)*?\.desktop"#,
+            window_class = regex::escape(&w_class.to_lowercase())
+        )),
+        WindowClassProvider::WithAlternative(w_class, alt_w_class) => Regex::new(&format!(
+            r#"({window_class}|{alt_window_class})(-.*?)*?\.desktop"#,
+            window_class = regex::escape(&w_class.to_lowercase()),
+            alt_window_class = regex::escape(&alt_w_class.to_lowercase())
+        )),
+    }
+    .unwrap();
 
     let mut match_filename = None;
     let mut match_location = None;
@@ -138,12 +138,12 @@ pub fn find_command_in_proc(pid: i32) -> std::io::Result<Vec<String>> {
 
 pub fn find_command(
     pid: i32,
-    window_class: &str,
+    window_class: Option<&str>,
     gtk_app_id: Option<&str>,
 ) -> Result<Vec<String>, FindError> {
     if let Some(gtk_app_id) = gtk_app_id {
         if let Ok(cmdline) = try_find_command_by_gtk_app_id(gtk_app_id) {
-            println!("{} from gtk app id", window_class);
+            println!("{} from gtk app id", gtk_app_id);
             return Ok(cmdline);
         }
     }
@@ -153,12 +153,22 @@ pub fn find_command(
         .file_name()
         .map(OsStr::to_string_lossy);
 
-    if let Ok(cmdline) = try_find_command_by_window_class(window_class, alt_window_class.as_deref())
-    {
-        println!("{} from desktop entry", window_class);
-        return Ok(cmdline);
+    let window_class = match (window_class, &alt_window_class) {
+        (Some(w_class), Some(alt_w_class)) if w_class != alt_w_class => Some(
+            WindowClassProvider::WithAlternative(w_class, alt_w_class.as_ref()),
+        ),
+        (Some(w_class), _) => Some(WindowClassProvider::Single(w_class)),
+        (None, Some(alt_w_class)) => Some(WindowClassProvider::Single(alt_w_class.as_ref())),
+        (None, None) => None,
+    };
+
+    if let Some(window_class) = window_class {
+        if let Ok(cmdline) = try_find_command_by_window_class(window_class) {
+            println!("{:?} from desktop entry", window_class);
+            return Ok(cmdline);
+        }
     }
 
-    println!("{} from proc", window_class);
+    println!("{} from /proc", pid);
     Ok(proc_cmdline)
 }

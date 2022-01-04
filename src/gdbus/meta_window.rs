@@ -36,7 +36,7 @@ pub struct WindowGeom {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct MetaWindow {
-    pub window_class: String,
+    pub window_class: Option<String>,
     pub geom: WindowGeom,
     pub pid: i32,
     pub stable_seq: u32,
