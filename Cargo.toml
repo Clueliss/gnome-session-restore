@@ -2,6 +2,8 @@
 name = "gnome-session-restore"
 edition = "2018"
 version = "0.1.0"
+authors = ["Liss Heidrich"]
+description = "Save and restore gnome sessions"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
