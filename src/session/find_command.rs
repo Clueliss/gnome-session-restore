@@ -3,11 +3,12 @@ use serde::Deserialize;
 use std::{ffi::OsString, fs::File, ops::Deref, path::Path};
 use thiserror::Error;
 
-const DESKTOP_ENTRY_LOCATIONS: [&str; 4] = [
+const DESKTOP_ENTRY_LOCATIONS: [&str; 5] = [
     "/usr/share/applications",
     "/usr/local/share/application",
     "~/.local/share/applications",
     "/var/lib/flatpak/exports/share/applications",
+    "/var/lib/snapd/desktop/applications",
 ];
 
 #[derive(Error, Debug)]
