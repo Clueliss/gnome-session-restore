@@ -3,6 +3,13 @@ use serde::Deserialize;
 use std::{ffi::OsString, fs::File, ops::Deref, path::Path};
 use thiserror::Error;
 
+const DESKTOP_ENTRY_LOCATIONS: [&str; 4] = [
+    "/usr/share/applications",
+    "/usr/local/share/application",
+    "~/.local/share/applications",
+    "/var/lib/flatpak/exports/share/applications",
+];
+
 #[derive(Error, Debug)]
 pub enum FindError {
     #[error("io error")]
@@ -41,7 +48,7 @@ fn find_main_exec_entry<P: AsRef<Path>>(path: P) -> Result<Vec<String>, FindErro
 }
 
 pub fn try_find_command_by_gtk_app_id(gtk_app_id: &str) -> Result<Vec<String>, FindError> {
-    let p = Path::new("/usr/share/applications")
+    let p = Path::new(DESKTOP_ENTRY_LOCATIONS[0])
         .join(format!("{gtk_app_id}.desktop", gtk_app_id = gtk_app_id));
 
     find_main_exec_entry(p)
@@ -55,12 +62,6 @@ fn is_rhs_less_complex(x: Option<&str>, y: &str) -> bool {
 }
 
 pub fn try_find_command_by_window_class(w_class: &str) -> Result<Vec<String>, FindError> {
-    const DESKTOP_ENTRY_LOCATIONS: [&str; 3] = [
-        "/usr/share/applications",
-        "/usr/local/share/application",
-        "~/.local/share/applications",
-    ];
-
     let re = Regex::new(&format!(
         r#"{window_class}(-.*?)*?\.desktop"#,
         window_class = w_class.to_lowercase()
@@ -135,11 +136,7 @@ pub fn find_command(
         return Ok(cmdline);
     }
 
-    match try_find_command_by_window_class(window_class) {
-        Ok(cmdline) => return Ok(cmdline),
-        Err(e) => println!("{:?}", e),
-    }
-
+    println!("{} from proc", window_class);
     let cmdline = find_command_in_proc(pid)?;
     Ok(cmdline)
 }
