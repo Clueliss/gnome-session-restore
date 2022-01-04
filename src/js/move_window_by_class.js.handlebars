@@ -4,7 +4,8 @@ let w = global
     .filter(w => w.wm_class == "{{window_class}}")
     .reduce((acc, x) => (acc && acc.id > x.id) ? acc : x, null);
 
-if ({{minimized}}) {
+{{#if minimized}}
     w.minimize();
-}
+{{/if}}
+
 w.move_resize_frame(true, {{x}}, {{y}}, {{width}}, {{height}});
