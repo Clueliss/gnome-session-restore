@@ -4,15 +4,19 @@ use std::{
     collections::HashSet, fs::File, hash::Hash, path::Path, process::Command, time::Duration,
 };
 
+use gio::{prelude::AppInfoExt, AppLaunchContext};
 use serde::{Deserialize, Serialize};
 
-use crate::dbus::{MetaWindow, WindowCtlProxy};
+use crate::{
+    dbus::{MetaWindow, WindowCtlProxy},
+    session::find_command::Exec,
+};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct SessionApplication {
     #[serde(flatten)]
     window: MetaWindow,
-    cmdline: Vec<String>,
+    exec: Exec,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -56,8 +60,8 @@ pub fn save<P: AsRef<Path>>(
         .filter_map(|w| {
             let app_id = w.gtk_app_id.clone();
 
-            find_command::find_command(w.pid, &w.window_class, &w.gtk_app_id)
-                .map(|cmdline| SessionApplication { window: w, cmdline })
+            find_command::find_command(w.pid, &w.window_class, &w.gtk_app_id, &w.sandboxed_app_id)
+                .map(|exec| SessionApplication { window: w, exec })
                 .map_err(|e| eprintln!("unable to find command for {:?}: {:?}", app_id, e))
                 .ok()
         })
@@ -86,13 +90,26 @@ pub fn restore<P: AsRef<Path>>(
 
     let uniq = unique_applications(sess.applications);
 
-    for win in &uniq {
-        let res = Command::new(&win.0.cmdline[0])
-            .args(&win.0.cmdline[1..])
-            .spawn();
+    for SessionApplicationByWindowClass(win) in &uniq {
+        match &win.exec {
+            Exec::CmdLine(cmdline) => {
+                let res = Command::new(&cmdline[0]).args(&cmdline[1..]).spawn();
 
-        if let Err(e) = res {
-            eprintln!("Error spawning process '{:?}': {e}", win.0.cmdline, e = e);
+                if let Err(e) = res {
+                    eprintln!("Error spawning process '{:?}': {e}", cmdline, e = e);
+                }
+            }
+            Exec::DesktopFile(path) => match gio::DesktopAppInfo::from_filename(path) {
+                Some(x) => {
+                    if let Err(e) = x.launch_uris::<AppLaunchContext>(&[], None) {
+                        eprintln!("Error spawning process '{:?}': {e}", path, e = e);
+                    }
+                }
+                None => eprintln!(
+                    "Error spawning process '{:?}': could not get desktop app info",
+                    path
+                ),
+            },
         }
     }
 

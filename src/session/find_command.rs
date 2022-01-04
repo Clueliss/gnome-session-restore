@@ -1,18 +1,19 @@
 use std::{
     ffi::{OsStr, OsString},
-    fs::File,
-    path::Path,
+    os::unix::ffi::{OsStrExt, OsStringExt},
+    path::{Path, PathBuf},
 };
 
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const DESKTOP_ENTRY_LOCATIONS: [&str; 5] = [
+const DESKTOP_ENTRY_LOCATIONS: [&str; 6] = [
     "/usr/share/applications",
     "/usr/local/share/application",
     "~/.local/share/applications",
     "/var/lib/flatpak/exports/share/applications",
+    "~/.local/share/flatpak/exports/share/applications",
     "/var/lib/snapd/desktop/applications",
 ];
 
@@ -24,8 +25,14 @@ pub enum FindError {
     #[error("could not find a suitable entry")]
     NoSuitableEntryFound,
 
-    #[error("could only find invalid entry")]
-    InvalidEntryFound,
+    #[error("process is zombie")]
+    ProcessIsZombie,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Exec {
+    CmdLine(Vec<OsString>),
+    DesktopFile(PathBuf),
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -34,48 +41,37 @@ pub enum WindowClassProvider<'a> {
     WithAlternative(&'a str, &'a str),
 }
 
-fn find_main_exec_entry<P: AsRef<Path>>(path: P) -> Result<Vec<String>, FindError> {
-    #[derive(Deserialize, Debug)]
-    struct MainSection {
-        #[serde(rename = "Exec")]
-        exec: String,
+pub fn try_find_command_by_gtk_app_id(gtk_app_id: &str) -> Result<Exec, FindError> {
+    let desktop_file_name = format!("{gtk_app_id}.desktop", gtk_app_id = gtk_app_id);
+    let p = Path::new(DESKTOP_ENTRY_LOCATIONS[0]).join(&desktop_file_name);
+
+    if p.exists() {
+        Ok(Exec::DesktopFile(p))
+    } else {
+        Err(FindError::NoSuitableEntryFound)
     }
-
-    #[derive(Deserialize, Debug)]
-    struct DesktopEntry {
-        #[serde(rename = "Desktop Entry")]
-        desktop_entry: MainSection,
-    }
-
-    let f = File::open(path)?;
-    let de: DesktopEntry = serde_ini::from_read(f).map_err(|_| FindError::InvalidEntryFound)?;
-
-    let cmdline = shell_words::split(&de.desktop_entry.exec)
-        .map_err(|_| FindError::InvalidEntryFound)?
-        .into_iter()
-        .filter(|s| !["%u", "%U", "%f", "%F"].contains(&s.as_str()))
-        .collect();
-
-    Ok(cmdline)
 }
 
-pub fn try_find_command_by_gtk_app_id(gtk_app_id: &str) -> Result<Vec<String>, FindError> {
-    let p = Path::new(DESKTOP_ENTRY_LOCATIONS[0])
-        .join(format!("{gtk_app_id}.desktop", gtk_app_id = gtk_app_id));
+pub fn try_find_command_by_sandboxed_app_id(sandboxed_app_id: &str) -> Result<Exec, FindError> {
+    let desktop_file_name = format!(
+        "{sandboxed_app_id}.desktop",
+        sandboxed_app_id = sandboxed_app_id
+    );
 
-    find_main_exec_entry(p)
-}
+    let p = DESKTOP_ENTRY_LOCATIONS.iter().find_map(|location| {
+        let p = Path::new(location).join(&desktop_file_name);
+        p.exists().then_some(p)
+    });
 
-fn is_rhs_less_complex(x: Option<&str>, y: &str) -> bool {
-    match x {
-        None => true,
-        Some(x) => y.len() < x.len(),
+    match p {
+        Some(p) => Ok(Exec::DesktopFile(p)),
+        None => Err(FindError::NoSuitableEntryFound),
     }
 }
 
 pub fn try_find_command_by_window_class(
     window_class: WindowClassProvider<'_>,
-) -> Result<Vec<String>, FindError> {
+) -> Result<Exec, FindError> {
     let re = match window_class {
         WindowClassProvider::Single(w_class) => Regex::new(&format!(
             r#"{window_class}(-.*?)*?\.desktop"#,
@@ -89,51 +85,88 @@ pub fn try_find_command_by_window_class(
     }
     .unwrap();
 
-    let mut match_filename = None;
-    let mut match_location = None;
+    let desktop_file = DESKTOP_ENTRY_LOCATIONS
+        .iter()
+        .map(shellexpand::tilde)
+        .filter_map(|location| std::fs::read_dir(location.as_ref()).ok())
+        .flatten()
+        .filter_map(|file| match file {
+            Err(_) => None,
+            Ok(file) => {
+                let filename = file.file_name();
+                let lowercase_filename = filename.to_string_lossy().as_ref().to_lowercase();
 
-    for location in DESKTOP_ENTRY_LOCATIONS.iter().map(shellexpand::tilde) {
-        let files = match std::fs::read_dir(location.as_ref()) {
-            Ok(files) => files,
-            Err(_) => continue,
-        };
+                re.is_match(&lowercase_filename).then_some(file)
+            }
+        })
+        .min_by_key(|direntry| {
+            let filename = direntry.file_name();
+            let filename = filename.to_string_lossy();
 
-        for file in files {
-            let file = file?;
-            let filename = file.file_name();
-            let filename_str = filename.to_string_lossy().to_ascii_lowercase();
-
-            if re.is_match(&filename_str) {
-                let mfm_str = match_filename
-                    .as_ref()
-                    .map(|f: &OsString| f.to_string_lossy());
-
-                if is_rhs_less_complex(mfm_str.as_deref(), &filename_str) {
-                    match_location = Some(location.clone());
-                    match_filename = Some(filename);
+            match window_class {
+                WindowClassProvider::Single(class) => strsim::levenshtein(class, filename.as_ref()),
+                WindowClassProvider::WithAlternative(class_a, class_b) => {
+                    let sim_a = strsim::levenshtein(class_a, filename.as_ref());
+                    let sim_b = strsim::levenshtein(class_b, filename.as_ref());
+                    (sim_a + sim_b) / 2
                 }
             }
-        }
-    }
+        });
 
-    match match_location.zip(match_filename) {
-        Some((location, filename)) => {
-            find_main_exec_entry(Path::new(location.as_ref()).join(filename))
-        }
+    match desktop_file {
+        Some(direntry) => Ok(Exec::DesktopFile(direntry.path())),
         None => Err(FindError::NoSuitableEntryFound),
     }
 }
 
-pub fn find_command_in_proc(pid: i32) -> std::io::Result<Vec<String>> {
-    let content: Vec<_> = std::fs::read_to_string(format!("/proc/{pid}/cmdline", pid = pid))?
-        .split_terminator('\0')
-        .map(ToString::to_string)
+/// Tries to get the commandline for a given pid from the `/proc` filesystem.
+///
+/// # Disclaimer
+/// While this may sound simple, it really is not.
+///
+/// ## /proc/{pid}/cmdline
+/// Normally it is expected that `/proc/{pid}/cmdline` is seperated by \0 characters.
+/// So parsing would be simple.
+/// Except that it sometimes isn't because processes can arbitrarily write to `argv`. So:
+///
+/// 1. Sometimes it is seperated by spaces and all arguments are stuffed into `argv[0]`.
+/// 2. Sometimes it doesn't even contain a valid executable name, instead it contains just some string.
+/// 3. In case of zombie processes it contains nothing.
+///
+/// ## /proc/{pid}/exe
+/// Then there is `/proc/{pid}/exe`.
+/// Which normally is a symlink to the executable of the program.
+/// Except that it sometimes isn't. So:
+///
+/// 1. Different threads may have different symlinks.
+/// 2. The symlink might not be available if the main thread exited early e.g. via `pthread_exit()`.
+/// 3. It might also point to a deleted file, if the executable got deleted.
+pub fn find_command_in_proc(pid: i32) -> Result<Vec<OsString>, FindError> {
+    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline", pid = pid))?;
+
+    let seperated: Vec<_> = cmdline
+        .split(|&b| b == b'\0')
+        .map(OsStr::from_bytes)
         .collect();
 
-    if content.len() == 1 && content[0].contains(' ') && which::which(&content[0]).is_err() {
-        Ok(content[0].split(' ').map(ToString::to_string).collect())
+    if cmdline.is_empty() {
+        Err(FindError::ProcessIsZombie)
+    } else if seperated.len() == 1 && seperated[0].as_bytes().contains(&b' ') {
+        let mut seperated: Vec<_> = seperated[0]
+            .as_bytes()
+            .split(|&b| b == b' ')
+            .map(|s| OsString::from_vec(s.to_owned()))
+            .collect();
+
+        if !Path::new(&seperated[0]).exists() {
+            if let Ok(path) = std::fs::read_link(format!("/proc/{pid}/exe", pid = pid)) {
+                seperated[0] = path.into_os_string();
+            }
+        }
+
+        Ok(seperated)
     } else {
-        Ok(content)
+        Ok(seperated.into_iter().map(ToOwned::to_owned).collect())
     }
 }
 
@@ -141,11 +174,17 @@ pub fn find_command(
     pid: i32,
     window_class: &str,
     gtk_app_id: &str,
-) -> Result<Vec<String>, FindError> {
+    sandboxed_app_id: &str,
+) -> Result<Exec, FindError> {
     if !gtk_app_id.is_empty() {
-        if let Ok(cmdline) = try_find_command_by_gtk_app_id(gtk_app_id) {
-            println!("{} from gtk app id", gtk_app_id);
-            return Ok(cmdline);
+        if let Ok(exec) = try_find_command_by_gtk_app_id(gtk_app_id) {
+            return Ok(exec);
+        }
+    }
+
+    if !sandboxed_app_id.is_empty() {
+        if let Ok(exec) = try_find_command_by_sandboxed_app_id(sandboxed_app_id) {
+            return Ok(exec);
         }
     }
 
@@ -155,22 +194,23 @@ pub fn find_command(
         .map(OsStr::to_string_lossy);
 
     let window_class = match (window_class, alt_window_class.as_deref()) {
-        ("", None | Some("")) => None,
-        (w_class, None | Some("")) => Some(WindowClassProvider::Single(w_class)),
+        ("", None) => None,
+        (w_class, None) => Some(WindowClassProvider::Single(w_class)),
         ("", Some(alt_w_class)) => Some(WindowClassProvider::Single(alt_w_class)),
-        (w_class, Some(alt_w_class)) if w_class != alt_w_class => {
+        (w_class, Some(alt_w_class))
+            if w_class != alt_w_class
+                && strsim::normalized_levenshtein(w_class, alt_w_class) > 0.25 =>
+        {
             Some(WindowClassProvider::WithAlternative(w_class, alt_w_class))
         }
         (w_class, Some(_)) => Some(WindowClassProvider::Single(w_class)),
     };
 
     if let Some(window_class) = window_class {
-        if let Ok(cmdline) = try_find_command_by_window_class(window_class) {
-            println!("{:?} from desktop entry", window_class);
-            return Ok(cmdline);
+        if let Ok(exec) = try_find_command_by_window_class(window_class) {
+            return Ok(exec);
         }
     }
 
-    println!("{} from /proc", pid);
-    Ok(proc_cmdline)
+    Ok(Exec::CmdLine(proc_cmdline))
 }

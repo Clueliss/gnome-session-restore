@@ -33,4 +33,5 @@ pub struct MetaWindow {
     pub stable_seq: u32,
     pub window_class: String,
     pub gtk_app_id: String,
+    pub sandboxed_app_id: String,
 }
