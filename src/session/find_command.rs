@@ -61,12 +61,25 @@ fn is_rhs_less_complex(x: Option<&str>, y: &str) -> bool {
     }
 }
 
-pub fn try_find_command_by_window_class(w_class: &str) -> Result<Vec<String>, FindError> {
-    let re = Regex::new(&format!(
-        r#"{window_class}(-.*?)*?\.desktop"#,
-        window_class = w_class.to_lowercase()
-    ))
-    .unwrap();
+pub fn try_find_command_by_window_class(
+    w_class: &str,
+    alt_w_class: Option<&str>,
+) -> Result<Vec<String>, FindError> {
+    let re = alt_w_class
+        .and_then(|awc| {
+            Regex::new(&format!(
+                r#"({window_class}|{alt_window_class})(-.*?)*?\.desktop"#,
+                window_class = w_class.to_lowercase(),
+                alt_window_class = awc.to_lowercase()
+            )).ok()
+        })
+        .or_else(|| {
+            Regex::new(&format!(
+                r#"{window_class}(-.*?)*?\.desktop"#,
+                window_class = w_class.to_lowercase()
+            )).ok()
+        })
+        .unwrap();
 
     let mut match_filename = None;
     let mut match_location = None;
@@ -131,12 +144,17 @@ pub fn find_command(
         }
     }
 
-    if let Ok(cmdline) = try_find_command_by_window_class(window_class) {
+    let proc_cmdline = find_command_in_proc(pid)?;
+    let alt_window_class = Path::new(&proc_cmdline[0])
+        .file_name()
+        .map(|f| f.to_string_lossy());
+
+    if let Ok(cmdline) = try_find_command_by_window_class(window_class, alt_window_class.as_deref())
+    {
         println!("{} from desktop entry", window_class);
         return Ok(cmdline);
     }
 
     println!("{} from proc", window_class);
-    let cmdline = find_command_in_proc(pid)?;
-    Ok(cmdline)
+    Ok(proc_cmdline)
 }
