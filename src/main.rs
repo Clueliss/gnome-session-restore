@@ -1,5 +1,3 @@
-#![feature(slice_group_by)]
-
 mod gdbus;
 mod session;
 
