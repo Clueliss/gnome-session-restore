@@ -61,10 +61,6 @@ struct Opts {
     #[clap(long, conflicts_with = "session")]
     system: bool,
 
-    /// overrides the use_unsafe_mode_enabler option in ~/.config/gnome-session-restore.conf
-    #[clap(long)]
-    use_unsafe_mode_enabler_override: Option<bool>,
-
     #[clap(subcommand)]
     subcommand: SessionAction,
 }
