@@ -7,6 +7,7 @@ use std::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use crate::dbus::MetaWindow;
 
 const DESKTOP_ENTRY_LOCATIONS: [&str; 6] = [
     "/usr/share/applications",
@@ -171,30 +172,27 @@ pub fn find_command_in_proc(pid: i32) -> Result<Vec<OsString>, FindError> {
 }
 
 pub fn find_command(
+    meta: &MetaWindow,
     min_wm_class_sim: f64,
-    pid: i32,
-    window_class: &str,
-    gtk_app_id: &str,
-    sandboxed_app_id: &str,
 ) -> Result<Exec, FindError> {
-    if !gtk_app_id.is_empty() {
-        if let Ok(exec) = try_find_command_by_gtk_app_id(gtk_app_id) {
+    if !meta.gtk_app_id.is_empty() {
+        if let Ok(exec) = try_find_command_by_gtk_app_id(&meta.gtk_app_id) {
             return Ok(exec);
         }
     }
 
-    if !sandboxed_app_id.is_empty() {
-        if let Ok(exec) = try_find_command_by_sandboxed_app_id(sandboxed_app_id) {
+    if !meta.sandboxed_app_id.is_empty() {
+        if let Ok(exec) = try_find_command_by_sandboxed_app_id(&meta.sandboxed_app_id) {
             return Ok(exec);
         }
     }
 
-    let proc_cmdline = find_command_in_proc(pid)?;
+    let proc_cmdline = find_command_in_proc(meta.pid)?;
     let alt_window_class = Path::new(&proc_cmdline[0])
         .file_name()
         .map(OsStr::to_string_lossy);
 
-    let window_class = match (window_class, alt_window_class.as_deref()) {
+    let window_class = match (meta.window_class.as_str(), alt_window_class.as_deref()) {
         ("", None) => None,
         (w_class, None) => Some(WindowClassProvider::Single(w_class)),
         ("", Some(alt_w_class)) => Some(WindowClassProvider::Single(alt_w_class)),

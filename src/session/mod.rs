@@ -61,7 +61,7 @@ pub fn save<P: AsRef<Path>>(
         .filter_map(|w| {
             let app_id = w.gtk_app_id.clone();
 
-            find_command::find_command(min_wm_class_sim, w.pid, &w.window_class, &w.gtk_app_id, &w.sandboxed_app_id)
+            find_command::find_command(&w, min_wm_class_sim)
                 .map(|exec| SessionApplication { window: w, exec })
                 .map_err(|e| eprintln!("unable to find command for {:?}: {:?}", app_id, e))
                 .ok()
