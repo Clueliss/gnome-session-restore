@@ -50,6 +50,7 @@ fn unique_applications(sess: Vec<SessionApplication>) -> HashSet<SessionApplicat
 pub fn save<P: AsRef<Path>>(
     conn: &WindowCtlProxy,
     path: P,
+    min_wm_class_sim: f64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let num_monitors = conn.get_num_monitors()?;
 
@@ -60,7 +61,7 @@ pub fn save<P: AsRef<Path>>(
         .filter_map(|w| {
             let app_id = w.gtk_app_id.clone();
 
-            find_command::find_command(w.pid, &w.window_class, &w.gtk_app_id, &w.sandboxed_app_id)
+            find_command::find_command(min_wm_class_sim, w.pid, &w.window_class, &w.gtk_app_id, &w.sandboxed_app_id)
                 .map(|exec| SessionApplication { window: w, exec })
                 .map_err(|e| eprintln!("unable to find command for {:?}: {:?}", app_id, e))
                 .ok()

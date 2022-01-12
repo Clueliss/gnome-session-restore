@@ -9,10 +9,26 @@ use clap::{AppSettings, Parser, Subcommand};
 use dbus::WindowCtlProxy;
 use zbus::Connection;
 
+fn valid_sim_value(s: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    let x = s.parse::<f32>()?;
+
+    if (0.0..=1.0).contains(&x) {
+        Ok(())
+    } else {
+        Err("expected value in range 0.0..=1.0".into())
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum SessionAction {
     /// Saves the current gnome session
-    Save,
+    Save {
+        /// Sets the minimum required similarity between the WM_CLASS
+        /// and the process name to allow for the process name to be considered
+        /// as an alternative application name.
+        #[clap(long, default_value = "0.25", validator = valid_sim_value)]
+        min_wm_class_sim: f64,
+    },
 
     /// Restores a gnome session from disk
     Restore {
@@ -67,14 +83,14 @@ fn main() {
     let shellbus = WindowCtlProxy::new(&conn).unwrap();
 
     match opts.subcommand {
-        SessionAction::Save => {
+        SessionAction::Save { min_wm_class_sim } => {
             let path = if opts.file == "-" {
                 Cow::Borrowed("/proc/self/fd/1")
             } else {
                 shellexpand::tilde(&opts.file)
             };
 
-            session::save(&shellbus, path.as_ref()).unwrap()
+            session::save(&shellbus, path.as_ref(), min_wm_class_sim).unwrap();
         }
         SessionAction::Restore { rm, mark } => {
             let path = if opts.file == "-" {

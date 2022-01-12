@@ -171,6 +171,7 @@ pub fn find_command_in_proc(pid: i32) -> Result<Vec<OsString>, FindError> {
 }
 
 pub fn find_command(
+    min_wm_class_sim: f64,
     pid: i32,
     window_class: &str,
     gtk_app_id: &str,
@@ -199,7 +200,7 @@ pub fn find_command(
         ("", Some(alt_w_class)) => Some(WindowClassProvider::Single(alt_w_class)),
         (w_class, Some(alt_w_class))
             if w_class != alt_w_class
-                && strsim::normalized_levenshtein(w_class, alt_w_class) > 0.25 =>
+                && strsim::normalized_levenshtein(w_class, alt_w_class) > min_wm_class_sim =>
         {
             Some(WindowClassProvider::WithAlternative(w_class, alt_w_class))
         }
