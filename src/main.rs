@@ -81,21 +81,21 @@ fn main() {
     match opts.subcommand {
         SessionAction::Save { min_wm_class_sim } => {
             let path = if opts.file == "-" {
-                Cow::Borrowed("/proc/self/fd/1")
+                "/proc/self/fd/1"
             } else {
-                shellexpand::tilde(&opts.file)
+                &opts.file
             };
 
-            session::save(&shellbus, path.as_ref(), min_wm_class_sim).unwrap();
+            session::save(&shellbus, path, min_wm_class_sim).unwrap();
         }
         SessionAction::Restore { rm, mark } => {
             let path = if opts.file == "-" {
-                Cow::Borrowed("/proc/self/fd/0")
+                "/proc/self/fd/0"
             } else {
-                shellexpand::tilde(&opts.file)
+                &opts.file
             };
 
-            session::restore(&shellbus, path.as_ref(), rm, mark).unwrap();
+            session::restore(&shellbus, path, rm, mark).unwrap();
         }
     }
 }
