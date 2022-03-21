@@ -1,12 +1,14 @@
-#![feature(bool_to_option)]
+#![feature(bool_to_option, once_cell)]
 
 mod dbus;
 mod session;
 
-use std::borrow::Cow;
-
-use clap::{AppSettings, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use dbus::WindowCtlProxy;
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 use zbus::Connection;
 
 fn valid_sim_value(s: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
@@ -17,6 +19,13 @@ fn valid_sim_value(s: &str) -> Result<(), Box<dyn std::error::Error + Send + Syn
     } else {
         Err("expected value in range 0.0..=1.0".into())
     }
+}
+
+fn default_session_file_path() -> PathBuf {
+    xdg::BaseDirectories::with_prefix("gnome-session-restore")
+        .unwrap()
+        .place_state_file("last-session.json")
+        .unwrap()
 }
 
 #[derive(Debug, Subcommand)]
@@ -43,11 +52,11 @@ enum SessionAction {
 }
 
 #[derive(Debug, Parser)]
-#[clap(setting = AppSettings::SubcommandRequired, version, author, about)]
+#[clap(version, author, about, subcommand_required = true)]
 struct Opts {
     /// Manually specify a session file
-    #[clap(short, long, default_value = "~/.last_session")]
-    file: String,
+    #[clap(short, long, default_value_os_t = default_session_file_path())]
+    file: PathBuf,
 
     /// Connect to the specified D-Bus address
     #[clap(long, conflicts_with_all = &["session", "system"])]
@@ -80,8 +89,8 @@ fn main() {
 
     match opts.subcommand {
         SessionAction::Save { min_wm_class_sim } => {
-            let path = if opts.file == "-" {
-                "/proc/self/fd/1"
+            let path = if AsRef::<OsStr>::as_ref(&opts.file) == "-" {
+                Path::new("/proc/self/fd/1")
             } else {
                 &opts.file
             };
@@ -89,8 +98,8 @@ fn main() {
             session::save(&shellbus, path, min_wm_class_sim).unwrap();
         }
         SessionAction::Restore { rm, mark } => {
-            let path = if opts.file == "-" {
-                "/proc/self/fd/0"
+            let path = if AsRef::<OsStr>::as_ref(&opts.file) == "-" {
+                Path::new("/proc/self/fd/0")
             } else {
                 &opts.file
             };

@@ -1,22 +1,33 @@
 use std::{
+    collections::HashSet,
     ffi::{OsStr, OsString},
+    lazy::SyncLazy,
     os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
 };
 
+use crate::dbus::MetaWindow;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use crate::dbus::MetaWindow;
 
-const DESKTOP_ENTRY_LOCATIONS: [&str; 6] = [
-    "/usr/share/applications",
-    "/usr/local/share/application",
-    "~/.local/share/applications",
-    "/var/lib/flatpak/exports/share/applications",
-    "~/.local/share/flatpak/exports/share/applications",
-    "/var/lib/snapd/desktop/applications",
-];
+static DESKTOP_ENTRY_LOCATIONS: SyncLazy<HashSet<PathBuf>> = SyncLazy::new(|| {
+    let bd = xdg::BaseDirectories::new().unwrap();
+
+    std::iter::once(bd.get_data_home())
+        .chain(bd.get_data_dirs())
+        .filter_map(|mut p| {
+            p.push("applications");
+
+            if p.exists() {
+                Some(p)
+            } else {
+                eprintln!("Ignoring {p:?} reason: directory does not exist");
+                None
+            }
+        })
+        .collect()
+});
 
 #[derive(Error, Debug)]
 pub enum FindError {
@@ -43,8 +54,8 @@ pub enum WindowClassProvider<'a> {
 }
 
 pub fn try_find_command_by_gtk_app_id(gtk_app_id: &str) -> Result<Exec, FindError> {
-    let desktop_file_name = format!("{gtk_app_id}.desktop", gtk_app_id = gtk_app_id);
-    let p = Path::new(DESKTOP_ENTRY_LOCATIONS[0]).join(&desktop_file_name);
+    let desktop_file_name = format!("{gtk_app_id}.desktop");
+    let p = Path::new("/usr/share/applications").join(&desktop_file_name);
 
     if p.exists() {
         Ok(Exec::DesktopFile(p))
@@ -54,13 +65,10 @@ pub fn try_find_command_by_gtk_app_id(gtk_app_id: &str) -> Result<Exec, FindErro
 }
 
 pub fn try_find_command_by_sandboxed_app_id(sandboxed_app_id: &str) -> Result<Exec, FindError> {
-    let desktop_file_name = format!(
-        "{sandboxed_app_id}.desktop",
-        sandboxed_app_id = sandboxed_app_id
-    );
+    let desktop_file_name = format!("{sandboxed_app_id}.desktop");
 
-    let p = DESKTOP_ENTRY_LOCATIONS.iter().find_map(|location| {
-        let p = Path::new(location).join(&desktop_file_name);
+    let p = DESKTOP_ENTRY_LOCATIONS.iter().find_map(|p| {
+        let p = p.join(&desktop_file_name);
         p.exists().then_some(p)
     });
 
@@ -88,8 +96,7 @@ pub fn try_find_command_by_window_class(
 
     let desktop_file = DESKTOP_ENTRY_LOCATIONS
         .iter()
-        .map(shellexpand::tilde)
-        .filter_map(|location| std::fs::read_dir(location.as_ref()).ok())
+        .filter_map(|location| std::fs::read_dir(location).ok())
         .flatten()
         .filter_map(|file| match file {
             Err(_) => None,
@@ -142,39 +149,38 @@ pub fn try_find_command_by_window_class(
 /// 1. Different threads may have different symlinks.
 /// 2. The symlink might not be available if the main thread exited early e.g. via `pthread_exit()`.
 /// 3. It might also point to a deleted file, if the executable got deleted.
-pub fn find_command_in_proc(pid: i32) -> Result<Vec<OsString>, FindError> {
-    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline", pid = pid))?;
-
-    let seperated: Vec<_> = cmdline
-        .split(|&b| b == b'\0')
-        .map(OsStr::from_bytes)
-        .collect();
+pub fn try_find_command_in_proc(pid: i32) -> Result<Vec<OsString>, FindError> {
+    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline"))?;
 
     if cmdline.is_empty() {
         Err(FindError::ProcessIsZombie)
-    } else if seperated.len() == 1 && seperated[0].as_bytes().contains(&b' ') {
-        let mut seperated: Vec<_> = seperated[0]
-            .as_bytes()
-            .split(|&b| b == b' ')
-            .map(|s| OsString::from_vec(s.to_owned()))
+    } else {
+        let seperated: Vec<_> = cmdline
+            .split(|&b| b == b'\0')
+            .map(OsStr::from_bytes)
             .collect();
 
-        if !Path::new(&seperated[0]).exists() {
-            if let Ok(path) = std::fs::read_link(format!("/proc/{pid}/exe", pid = pid)) {
-                seperated[0] = path.into_os_string();
-            }
-        }
+        if seperated.len() == 1 && seperated[0].as_bytes().contains(&b' ') {
+            let mut seperated: Vec<_> = seperated[0]
+                .as_bytes()
+                .split(|&b| b == b' ')
+                .map(|s| OsString::from_vec(s.to_owned()))
+                .collect();
 
-        Ok(seperated)
-    } else {
-        Ok(seperated.into_iter().map(ToOwned::to_owned).collect())
+            if !Path::new(&seperated[0]).exists() {
+                if let Ok(path) = std::fs::read_link(format!("/proc/{pid}/exe")) {
+                    seperated[0] = path.into_os_string();
+                }
+            }
+
+            Ok(seperated)
+        } else {
+            Ok(seperated.into_iter().map(ToOwned::to_owned).collect())
+        }
     }
 }
 
-pub fn find_command(
-    meta: &MetaWindow,
-    min_wm_class_sim: f64,
-) -> Result<Exec, FindError> {
+pub fn find_command(meta: &MetaWindow, min_wm_class_sim: f64) -> Result<Exec, FindError> {
     if !meta.gtk_app_id.is_empty() {
         if let Ok(exec) = try_find_command_by_gtk_app_id(&meta.gtk_app_id) {
             return Ok(exec);
@@ -187,7 +193,7 @@ pub fn find_command(
         }
     }
 
-    let proc_cmdline = find_command_in_proc(meta.pid)?;
+    let proc_cmdline = try_find_command_in_proc(meta.pid)?;
     let alt_window_class = Path::new(&proc_cmdline[0])
         .file_name()
         .map(OsStr::to_string_lossy);
