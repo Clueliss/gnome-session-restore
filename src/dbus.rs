@@ -10,11 +10,7 @@ use zvariant::derive::Type;
 pub trait WindowCtl {
     fn get_num_monitors(&self) -> zbus::Result<u32>;
     fn list_windows(&self) -> zbus::Result<Vec<MetaWindow>>;
-    fn set_window_geom_by_class(
-        &self,
-        window_class: &str,
-        window_geom: WindowGeom,
-    ) -> zbus::Result<bool>;
+    fn set_window_geom_by_class(&self, window_class: &str, window_geom: WindowGeom) -> zbus::Result<bool>;
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Type)]

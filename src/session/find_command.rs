@@ -5,6 +5,7 @@ use std::{
     os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
 };
+use std::lazy::Lazy;
 
 use crate::dbus::MetaWindow;
 use regex::Regex;
@@ -78,9 +79,7 @@ pub fn try_find_command_by_sandboxed_app_id(sandboxed_app_id: &str) -> Result<Ex
     }
 }
 
-pub fn try_find_command_by_window_class(
-    window_class: WindowClassProvider<'_>,
-) -> Result<Exec, FindError> {
+pub fn try_find_command_by_window_class(window_class: WindowClassProvider<'_>) -> Result<Exec, FindError> {
     let re = match window_class {
         WindowClassProvider::Single(w_class) => Regex::new(&format!(
             r#"{window_class}(-.*?)*?\.desktop"#,
@@ -155,10 +154,7 @@ pub fn try_find_command_in_proc(pid: i32) -> Result<Vec<OsString>, FindError> {
     if cmdline.is_empty() {
         Err(FindError::ProcessIsZombie)
     } else {
-        let seperated: Vec<_> = cmdline
-            .split(|&b| b == b'\0')
-            .map(OsStr::from_bytes)
-            .collect();
+        let seperated: Vec<_> = cmdline.split(|&b| b == b'\0').map(OsStr::from_bytes).collect();
 
         if seperated.len() == 1 && seperated[0].as_bytes().contains(&b' ') {
             let mut seperated: Vec<_> = seperated[0]
@@ -193,22 +189,24 @@ pub fn find_command(meta: &MetaWindow, min_wm_class_sim: f64) -> Result<Exec, Fi
         }
     }
 
-    let proc_cmdline = try_find_command_in_proc(meta.pid)?;
-    let alt_window_class = Path::new(&proc_cmdline[0])
-        .file_name()
+    let maybe_proc_cmdline = try_find_command_in_proc(meta.pid);
+
+    let alt_window_class = maybe_proc_cmdline
+        .as_ref()
+        .ok()
+        .and_then(|cmdline| cmdline.get(0))
+        .and_then(|binary| Path::new(binary).file_name())
         .map(OsStr::to_string_lossy);
 
     let window_class = match (meta.window_class.as_str(), alt_window_class.as_deref()) {
         ("", None) => None,
-        (w_class, None) => Some(WindowClassProvider::Single(w_class)),
         ("", Some(alt_w_class)) => Some(WindowClassProvider::Single(alt_w_class)),
         (w_class, Some(alt_w_class))
-            if w_class != alt_w_class
-                && strsim::normalized_levenshtein(w_class, alt_w_class) > min_wm_class_sim =>
+            if w_class != alt_w_class && strsim::normalized_levenshtein(w_class, alt_w_class) > min_wm_class_sim =>
         {
             Some(WindowClassProvider::WithAlternative(w_class, alt_w_class))
         }
-        (w_class, Some(_)) => Some(WindowClassProvider::Single(w_class)),
+        (w_class, _) => Some(WindowClassProvider::Single(w_class)),
     };
 
     if let Some(window_class) = window_class {
@@ -217,5 +215,5 @@ pub fn find_command(meta: &MetaWindow, min_wm_class_sim: f64) -> Result<Exec, Fi
         }
     }
 
-    Ok(Exec::CmdLine(proc_cmdline))
+    Ok(Exec::CmdLine(maybe_proc_cmdline?))
 }

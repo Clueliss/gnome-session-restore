@@ -6,8 +6,10 @@ mod session;
 use clap::{Parser, Subcommand};
 use dbus::WindowCtlProxy;
 use std::{
-    ffi::OsStr,
-    path::{Path, PathBuf},
+    ffi::{OsStr, OsString},
+    fs::File,
+    io::{BufReader, BufWriter, Read, Write},
+    path::PathBuf,
 };
 use zbus::Connection;
 
@@ -32,30 +34,32 @@ fn default_session_file_path() -> PathBuf {
 enum SessionAction {
     /// Saves the current gnome session
     Save {
-        /// Sets the minimum required similarity between the WM_CLASS
-        /// and the process name to allow for the process name to be considered
+        /// Set the minimum required (levenshtein) similarity between the WM_CLASS
+        /// and the binary name to allow it to be considered
         /// as an alternative application name.
-        #[clap(long, default_value = "0.25", validator = valid_sim_value)]
+        #[clap(long, default_value_t = 0.25, validator = valid_sim_value)]
         min_wm_class_sim: f64,
     },
 
     /// Restores a gnome session from disk
     Restore {
-        /// Removes the session file after restoring
+        /// Remove the session file after restoring
+        /// [hint: ignored when reading from stdin]
         #[clap(long)]
         rm: bool,
 
-        /// Marks the session file with the current timestamp after restoring
+        /// Rename the file to the given name after restoring
+        /// [hint: ignored when reading from stdin]
         #[clap(long)]
-        mark: bool,
+        rename: Option<OsString>,
     },
 }
 
 #[derive(Debug, Parser)]
 #[clap(version, author, about, subcommand_required = true)]
 struct Opts {
-    /// Manually specify a session file
-    #[clap(short, long, default_value_os_t = default_session_file_path())]
+    /// Manually specify a session file [hint: use `-` for std(in|out) redirection]
+    #[clap(short, long, default_value_os_t = default_session_file_path(), forbid_empty_values = true)]
     file: PathBuf,
 
     /// Connect to the specified D-Bus address
@@ -76,6 +80,7 @@ struct Opts {
 
 fn main() {
     let opts = Opts::parse();
+    let redirected_to_std_stream = opts.file == OsStr::new("-");
 
     let conn = if opts.system {
         Connection::new_system().expect("system dbus")
@@ -85,26 +90,45 @@ fn main() {
         Connection::new_session().expect("session dbus")
     };
 
-    let shellbus = WindowCtlProxy::new(&conn).unwrap();
+    let shellbus = WindowCtlProxy::new(&conn).expect("service at destination");
 
     match opts.subcommand {
         SessionAction::Save { min_wm_class_sim } => {
-            let path = if AsRef::<OsStr>::as_ref(&opts.file) == "-" {
-                Path::new("/proc/self/fd/1")
+            let writer: Box<dyn Write> = if redirected_to_std_stream {
+                Box::new(std::io::stdout())
             } else {
-                &opts.file
+                let f = File::create(&opts.file).unwrap();
+                let bw = BufWriter::new(f);
+
+                Box::new(bw)
             };
 
-            session::save(&shellbus, path, min_wm_class_sim).unwrap();
+            session::save(&shellbus, writer, min_wm_class_sim).unwrap();
         }
-        SessionAction::Restore { rm, mark } => {
-            let path = if AsRef::<OsStr>::as_ref(&opts.file) == "-" {
-                Path::new("/proc/self/fd/0")
+        SessionAction::Restore { rm, rename } => {
+            let reader: Box<dyn Read> = if redirected_to_std_stream {
+                Box::new(std::io::stdin())
             } else {
-                &opts.file
+                let f = File::open(&opts.file).unwrap();
+                let br = BufReader::new(f);
+
+                Box::new(br)
             };
 
-            session::restore(&shellbus, path, rm, mark).unwrap();
+            session::restore(&shellbus, reader).unwrap();
+
+            if redirected_to_std_stream {
+                eprintln!("ignoring `--rm` and `--rename` because input file was stdin");
+            } else if let Some(new_name) = rename {
+                let new_file = opts.file.with_file_name(new_name);
+                std::fs::rename(&opts.file, &new_file).unwrap();
+
+                if rm {
+                    std::fs::remove_file(new_file).unwrap();
+                }
+            } else if rm {
+                std::fs::remove_file(&opts.file).unwrap();
+            }
         }
     }
 }
