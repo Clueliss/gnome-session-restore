@@ -6,3 +6,6 @@ install: prog
 
 uninstall:
 	sudo rm /usr/local/bin/gnome-session-restore
+
+testset:
+	bash ./generate-testset.sh > testset.list

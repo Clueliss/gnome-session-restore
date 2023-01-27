@@ -1,19 +1,34 @@
-mod find_command;
-
+use crate::dbus::{MetaWindow, WindowCtlProxy};
+use gio::{prelude::AppInfoExt, AppLaunchContext};
+use serde::{ser::SerializeSeq, Deserialize, Serialize, Serializer};
 use std::{
+    ffi::OsString,
     io::{Read, Write},
+    path::PathBuf,
     process::Command,
     time::Duration,
 };
-
-use gio::{prelude::AppInfoExt, AppLaunchContext};
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{
-    dbus::{MetaWindow, WindowCtlProxy},
-    session::find_command::Exec,
-};
+pub use crate::find_command::{Capability, Confidence, FindOptions};
+
+fn utf8_ser<S: Serializer>(x: &[OsString], s: S) -> Result<S::Ok, S::Error> {
+    let mut seq = s.serialize_seq(Some(x.len()))?;
+
+    let itr = x.iter().map(|osstr| osstr.to_str().unwrap());
+
+    for item in itr {
+        seq.serialize_element(item)?;
+    }
+
+    seq.end()
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub enum Exec {
+    CmdLine(#[serde(serialize_with = "utf8_ser")] Vec<OsString>),
+    DesktopFile(PathBuf),
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 struct SessionApplication {
@@ -44,27 +59,32 @@ pub enum SaveError {
 
 pub type RestoreError = serde_json::Error;
 
-pub fn save<W: Write>(conn: &WindowCtlProxy, writer: W, min_wm_class_sim: f64) -> Result<(), SaveError> {
+pub fn save<W: Write, F, E>(conn: &WindowCtlProxy, writer: W, find: F) -> Result<(), SaveError>
+where
+    F: Fn(&MetaWindow) -> Result<Exec, E>,
+    E: std::error::Error,
+{
     let num_monitors = conn.get_num_monitors()?;
 
     let res = conn.list_windows()?;
 
     let v: Vec<_> = res
         .into_iter()
+        .filter(|w| w.window_class != "Gnome-shell")
         .filter_map(|w| {
-            let app_id = w.gtk_app_id.clone();
+            let wm_class = w.window_class.clone();
+            let gtk_app_id = w.gtk_app_id.clone();
+            let sandboxed_app_id = w.sandboxed_app_id.clone();
+            let pid = w.pid;
 
-            find_command::find_command(&w, min_wm_class_sim)
+            find(&w)
                 .map(|exec| SessionApplication { window: w, exec })
-                .map_err(|e| eprintln!("unable to find command for {:?}: {:?}", app_id, e))
+                .map_err(|e| eprintln!("unable to find command for {{ wm_class: {:?}, gtk_app_id: {:?}, sandboxed_app_id: {:?}, pid: {:?} }}: {e}", wm_class, gtk_app_id, sandboxed_app_id, pid))
                 .ok()
         })
         .collect();
 
-    let session = Session {
-        applications: v,
-        num_monitors,
-    };
+    let session = Session { applications: v, num_monitors };
 
     serde_json::to_writer(writer, &session)?;
 
@@ -86,13 +106,13 @@ pub fn restore<R: Read>(conn: &WindowCtlProxy, rdr: R) -> Result<(), RestoreErro
                 if let Err(e) = res {
                     eprintln!("Error spawning process '{cmdline:?}': {e:?}");
                 }
-            }
+            },
             Exec::DesktopFile(path) => match gio::DesktopAppInfo::from_filename(path) {
                 Some(x) => {
                     if let Err(e) = x.launch_uris::<AppLaunchContext>(&[], None) {
                         eprintln!("Error spawning process '{path:?}': {e:?}");
                     }
-                }
+                },
                 None => eprintln!("Error spawning process '{path:?}': could not get desktop app info"),
             },
         }
